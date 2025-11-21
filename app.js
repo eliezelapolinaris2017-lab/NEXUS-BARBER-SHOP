@@ -1,9 +1,9 @@
-// app.js — Nexus Barber Shop (Firestore, PIN, páginas + Caja + PWA)
+// app.js — Nexus Barber Shop
+// Tickets + Barberos + Agenda + Tema oscuro + Firestore por usuario + PWA
 
 /* ========== CONFIG FIREBASE ========== */
 const firebaseConfig = {
-  // ⛔ IMPORTANTE: reemplaza esto por la config de tu proyecto "nexus-barber"
-   apiKey: "AIzaSyA6-RrCXbPPVPZ4VqQRest1n_aojN-goPA",
+  apiKey: "AIzaSyA6-RrCXbPPVPZ4VqQRest1n_aojN-goPA",
   authDomain: "nexus-barber-shop.firebaseapp.com",
   projectId: "nexus-barber-shop",
   storageBucket: "nexus-barber-shop.firebasestorage.app",
@@ -11,34 +11,50 @@ const firebaseConfig = {
   appId: "1:524186377414:web:909c712216dc1834454bc7"
 };
 
-
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 const googleProvider = new firebase.auth.GoogleAuthProvider();
 
 /* ========== ESTADO LOCAL ========== */
-const LOCAL_KEY = "nexus_barber_state_v1";
+const LOCAL_KEY = "nexus_barber_state_v2";
 
 let state = {
+  // Seguridad
   pin: "1234",
+
+  // Branding
   appName: "Nexus Barber Shop",
   logoUrl: "",
   pdfHeaderText: "",
   pdfFooterText: "",
   footerText: "© 2025 Nexus Barber Shop — Sistema de tickets",
+
+  // Datos
   tickets: [],
-  commissionRates: {
-    Edwin: 40,
-    Carlos: 35,
-    Luis: 35,
-    default: 30
-  },
+  barbers: [],
+  appointments: [],
+
+  // Tema (dark / light)
+  theme: "dark",
+
+  // Config calendario
+  calendarDisabledWeekdays: [], // ej: [0,6] = domingo y sábado
+  calendarDisabledHours: [],    // ej: [0,1,2,...,8,21,22,23]
+
+  // Usuario / listeners
   user: null,
-  unsubscribeTickets: null
+  unsubscribeTickets: null,
+  unsubscribeBarbers: null,
+  unsubscribeAppointments: null
 };
 
+// Ticket en edición (por número). null = nuevo
 let currentEditingNumber = null;
+// Barbero en edición (por id). null = nuevo
+let currentEditingBarberId = null;
+// Cita en edición (por id). null = nueva
+let currentEditingAppointmentId = null;
 
 function loadState() {
   try {
@@ -46,14 +62,6 @@ function loadState() {
     if (raw) {
       const parsed = JSON.parse(raw);
       state = { ...state, ...parsed };
-      if (!state.commissionRates) {
-        state.commissionRates = {
-          Edwin: 40,
-          Carlos: 35,
-          Luis: 35,
-          default: 30
-        };
-      }
     }
   } catch (e) {
     console.error("Error leyendo localStorage", e);
@@ -64,10 +72,31 @@ function saveState() {
   const copy = { ...state };
   delete copy.user;
   delete copy.unsubscribeTickets;
+  delete copy.unsubscribeBarbers;
+  delete copy.unsubscribeAppointments;
   localStorage.setItem(LOCAL_KEY, JSON.stringify(copy));
 }
 
+/* ========== FIRESTORE HELPERS ========== */
+
+function ticketsCollectionRef(uid) {
+  return db.collection("users").doc(uid).collection("barberTickets");
+}
+
+function barbersCollectionRef(uid) {
+  return db.collection("users").doc(uid).collection("barbers");
+}
+
+function appointmentsCollectionRef(uid) {
+  return db.collection("users").doc(uid).collection("appointments");
+}
+
+function brandingDocRef(uid) {
+  return db.collection("users").doc(uid).collection("branding").doc("barberShop");
+}
+
 /* ========== DOM ========== */
+
 // vistas
 const pinScreen = document.getElementById("pinScreen");
 const authScreen = document.getElementById("authScreen");
@@ -91,21 +120,23 @@ const appLogoImg = document.getElementById("appLogo");
 const pinLogoImg = document.getElementById("pinLogo");
 const footerTextSpan = document.getElementById("footerText");
 const navButtons = Array.from(document.querySelectorAll(".nav-btn"));
-
 const pages = {
   dashboard: document.getElementById("page-dashboard"),
   historial: document.getElementById("page-historial"),
   caja: document.getElementById("page-caja"),
-  comisiones: document.getElementById("page-comisiones"),
+  agenda: document.getElementById("page-agenda"),
   config: document.getElementById("page-config")
 };
 
-// dashboard form
+// Tema
+const themeToggleBtn = document.getElementById("themeToggleBtn");
+
+// dashboard form (tickets)
 const ticketNumberInput = document.getElementById("ticketNumber");
 const ticketDateInput = document.getElementById("ticketDate");
 const clientNameInput = document.getElementById("clientName");
-const barberSelect = document.getElementById("barber");
-const barberCustomInput = document.getElementById("barberCustom");
+const barberSelect = document.getElementById("barberSelect"); // combo barbero
+const barberCustomInput = document.getElementById("barberCustom"); // otro barbero manual
 const paymentMethodSelect = document.getElementById("paymentMethod");
 const serviceDescInput = document.getElementById("serviceDesc");
 const quantityInput = document.getElementById("quantity");
@@ -126,22 +157,6 @@ const clearFilterBtn = document.getElementById("clearFilterBtn");
 const exportPdfBtn = document.getElementById("exportPdfBtn");
 const backupJsonBtn = document.getElementById("backupJsonBtn");
 
-// config
-const logoUrlInput = document.getElementById("logoUrlInput");
-const pdfHeaderTextArea = document.getElementById("pdfHeaderText");
-const pdfFooterTextArea = document.getElementById("pdfFooterText");
-const footerTextInput = document.getElementById("footerTextInput");
-const newPinInput = document.getElementById("newPinInput");
-const changePinBtn = document.getElementById("changePinBtn");
-const pinChangeMessage = document.getElementById("pinChangeMessage");
-const saveBrandingBtn = document.getElementById("saveBrandingBtn");
-const brandingStatus = document.getElementById("brandingStatus");
-
-const commissionEdwinInput = document.getElementById("commissionEdwin");
-const commissionCarlosInput = document.getElementById("commissionCarlos");
-const commissionLuisInput = document.getElementById("commissionLuis");
-const commissionDefaultInput = document.getElementById("commissionDefault");
-
 // caja
 const cajaStartInput = document.getElementById("cajaStart");
 const cajaEndInput = document.getElementById("cajaEnd");
@@ -152,45 +167,157 @@ const cajaTotalAthSpan = document.getElementById("cajaTotalAth");
 const cajaTotalCardSpan = document.getElementById("cajaTotalCard");
 const cajaTotalAllSpan = document.getElementById("cajaTotalAll");
 
-// comisiones
-const comiStartInput = document.getElementById("comiStart");
-const comiEndInput = document.getElementById("comiEnd");
-const comiBarberSelect = document.getElementById("comiBarber");
-const comiApplyBtn = document.getElementById("comiApplyBtn");
-const comiClearBtn = document.getElementById("comiClearBtn");
-const comiTableBody = document.getElementById("comiTableBody");
-const comiTotalSpan = document.getElementById("comiTotal");
+// Agenda / Calendario
+const agendaDateInput = document.getElementById("agendaDate");
+const agendaTimeInput = document.getElementById("agendaTime");
+const agendaBarberSelect = document.getElementById("agendaBarber");
+const agendaClientInput = document.getElementById("agendaClient");
+const agendaServiceInput = document.getElementById("agendaService");
+const agendaStatusSelect = document.getElementById("agendaStatus");
+const agendaAddBtn = document.getElementById("agendaAddBtn");
+const agendaClearBtn = document.getElementById("agendaClearBtn");
+const agendaTableBody = document.getElementById("agendaTableBody");
+const calendarWarning = document.getElementById("calendarWarning");
 
-/* ========== RENDER BRANDING ========== */
-function renderBranding() {
-  appNameEditable.textContent = state.appName || "Nexus Barber Shop";
-  pinAppNameTitle.textContent = state.appName || "Nexus Barber Shop";
+// Config (branding, PIN, calendario)
+const logoUrlInput = document.getElementById("logoUrlInput");
+const pdfHeaderTextArea = document.getElementById("pdfHeaderText");
+const pdfFooterTextArea = document.getElementById("pdfFooterText");
+const footerTextInput = document.getElementById("footerTextInput");
+const newPinInput = document.getElementById("newPinInput");
+const changePinBtn = document.getElementById("changePinBtn");
+const pinChangeMessage = document.getElementById("pinChangeMessage");
+const saveBrandingBtn = document.getElementById("saveBrandingBtn");
+const brandingStatus = document.getElementById("brandingStatus");
 
-  logoUrlInput.value = state.logoUrl || "";
-  pdfHeaderTextArea.value = state.pdfHeaderText || "";
-  pdfFooterTextArea.value = state.pdfFooterText || "";
-  footerTextInput.value = state.footerText || "© 2025 Nexus Barber Shop — Sistema de tickets";
-  footerTextSpan.textContent = state.footerText || "© 2025 Nexus Barber Shop — Sistema de tickets";
+// Config calendario
+const disabledWeekdaysInput = document.getElementById("disabledWeekdaysInput"); // ej: 0,6
+const disabledHoursInput = document.getElementById("disabledHoursInput");       // ej: 0-8,21-23
 
-  const logoSrc = state.logoUrl && state.logoUrl.trim() !== ""
-    ? state.logoUrl.trim()
-    : "assets/logo.png";
-  appLogoImg.src = logoSrc;
-  pinLogoImg.src = logoSrc;
+// Config barberos (lista editable)
+const barbersTableBody = document.getElementById("barbersTableBody");
+const barberNameInput = document.getElementById("barberNameInput");
+const barberPercentInput = document.getElementById("barberPercentInput");
+const barberSaveBtn = document.getElementById("barberSaveBtn");
+const barberCancelEditBtn = document.getElementById("barberCancelEditBtn");
 
-  if (commissionEdwinInput) {
-    commissionEdwinInput.value = state.commissionRates?.Edwin ?? 40;
+/* ========== RENDER BRANDING + THEME ========== */
+
+function applyTheme() {
+  const root = document.documentElement;
+  if (state.theme === "dark") {
+    root.classList.add("theme-dark");
+    root.classList.remove("theme-light");
+  } else {
+    root.classList.add("theme-light");
+    root.classList.remove("theme-dark");
   }
-  if (commissionCarlosInput) {
-    commissionCarlosInput.value = state.commissionRates?.Carlos ?? 35;
-  }
-  if (commissionLuisInput) {
-    commissionLuisInput.value = state.commissionRates?.Luis ?? 35;
-  }
-  if (commissionDefaultInput) {
-    commissionDefaultInput.value = state.commissionRates?.default ?? 30;
+
+  if (themeToggleBtn) {
+    themeToggleBtn.textContent =
+      state.theme === "dark" ? "Tema: Oscuro" : "Tema: Claro";
   }
 }
+
+function renderBranding() {
+  if (appNameEditable) {
+    appNameEditable.textContent = state.appName || "Nexus Barber Shop";
+  }
+  if (pinAppNameTitle) {
+    pinAppNameTitle.textContent = state.appName || "Nexus Barber Shop";
+  }
+
+  if (logoUrlInput) logoUrlInput.value = state.logoUrl || "";
+  if (pdfHeaderTextArea) pdfHeaderTextArea.value = state.pdfHeaderText || "";
+  if (pdfFooterTextArea) pdfFooterTextArea.value = state.pdfFooterText || "";
+  if (footerTextInput) {
+    footerTextInput.value =
+      state.footerText || "© 2025 Nexus Barber Shop — Sistema de tickets";
+  }
+  if (footerTextSpan) {
+    footerTextSpan.textContent =
+      state.footerText || "© 2025 Nexus Barber Shop — Sistema de tickets";
+  }
+
+  const logoSrc =
+    state.logoUrl && state.logoUrl.trim() !== ""
+      ? state.logoUrl.trim()
+      : "assets/logo.png";
+
+  if (appLogoImg) appLogoImg.src = logoSrc;
+  if (pinLogoImg) pinLogoImg.src = logoSrc;
+
+  // Calendario config
+  if (disabledWeekdaysInput) {
+    disabledWeekdaysInput.value = state.calendarDisabledWeekdays.join(",");
+  }
+  if (disabledHoursInput) {
+    disabledHoursInput.value = state.calendarDisabledHours.join(",");
+  }
+
+  applyTheme();
+}
+
+/* ========== UTILIDADES CALENDARIO ========== */
+
+function parseDisabledWeekdays(str) {
+  if (!str) return [];
+  return str
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s !== "")
+    .map((s) => Number(s))
+    .filter((n) => !isNaN(n) && n >= 0 && n <= 6);
+}
+
+function parseDisabledHours(str) {
+  if (!str) return [];
+  const result = [];
+  const parts = str.split(",");
+  parts.forEach((p) => {
+    const trimmed = p.trim();
+    if (!trimmed) return;
+    if (trimmed.includes("-")) {
+      const [a, b] = trimmed.split("-").map((x) => Number(x.trim()));
+      if (!isNaN(a) && !isNaN(b)) {
+        const start = Math.min(a, b);
+        const end = Math.max(a, b);
+        for (let h = start; h <= end; h++) {
+          if (h >= 0 && h <= 23 && !result.includes(h)) result.push(h);
+        }
+      }
+    } else {
+      const h = Number(trimmed);
+      if (!isNaN(h) && h >= 0 && h <= 23 && !result.includes(h)) {
+        result.push(h);
+      }
+    }
+  });
+  return result;
+}
+
+function isDateAllowed(dateStr) {
+  if (!dateStr) return false;
+  const d = new Date(dateStr + "T00:00:00");
+  if (isNaN(d.getTime())) return false;
+  const wd = d.getDay(); // 0 domingo
+  return !state.calendarDisabledWeekdays.includes(wd);
+}
+
+function isTimeAllowed(timeStr) {
+  if (!timeStr) return false;
+  const [hStr] = timeStr.split(":");
+  const h = Number(hStr);
+  if (isNaN(h)) return false;
+  return !state.calendarDisabledHours.includes(h);
+}
+
+function showCalendarWarning(msg) {
+  if (!calendarWarning) return;
+  calendarWarning.textContent = msg || "";
+}
+
+/* ========== TICKETS: NÚMERO + TABLA + CAJA ========== */
 
 function nextTicketNumber() {
   if (!state.tickets.length) return 1;
@@ -202,11 +329,14 @@ function nextTicketNumber() {
 }
 
 function renderTicketNumber() {
-  ticketNumberInput.value = nextTicketNumber();
+  if (ticketNumberInput) {
+    ticketNumberInput.value = nextTicketNumber();
+  }
 }
 
-/* ========== TABLA DE HISTORIAL ========== */
+/* Historial con botones Editar / X */
 function renderTicketsTable(listOverride) {
+  if (!ticketsTableBody) return;
   const list = listOverride || state.tickets;
   ticketsTableBody.innerHTML = "";
   list
@@ -235,10 +365,11 @@ function renderTicketsTable(listOverride) {
     });
 }
 
-/* ========== CAJA ========== */
+/* Caja: totales por método */
 function computeCajaTotals() {
-  const start = cajaStartInput.value;
-  const end = cajaEndInput.value;
+  if (!cajaTotalCashSpan) return;
+  const start = cajaStartInput ? cajaStartInput.value : "";
+  const end = cajaEndInput ? cajaEndInput.value : "";
 
   let efectivo = 0;
   let ath = 0;
@@ -263,124 +394,45 @@ function computeCajaTotals() {
   cajaTotalAllSpan.textContent = `$${all.toFixed(2)}`;
 }
 
-/* ========== COMISIONES ========== */
-function getCommissionRateForBarber(barber) {
-  if (!state.commissionRates) return 0;
-  if (barber && state.commissionRates[barber] != null) {
-    return Number(state.commissionRates[barber]) || 0;
-  }
-  return Number(state.commissionRates.default) || 0;
-}
-
-function getFilteredTicketsForCommissions() {
-  if (!state.tickets) return [];
-  const start = comiStartInput ? comiStartInput.value : "";
-  const end = comiEndInput ? comiEndInput.value : "";
-  const barber = comiBarberSelect ? comiBarberSelect.value : "";
-
-  return state.tickets.filter((t) => {
-    let ok = true;
-    if (start && t.date < start) ok = false;
-    if (end && t.date > end) ok = false;
-    if (barber && t.barber !== barber) ok = false;
-    return ok;
-  });
-}
-
-function renderCommissionsSummary() {
-  if (!comiTableBody || !comiTotalSpan) return;
-
-  let list = getFilteredTicketsForCommissions();
-
-  const hasFilters =
-    (comiStartInput && comiStartInput.value) ||
-    (comiEndInput && comiEndInput.value) ||
-    (comiBarberSelect && comiBarberSelect.value);
-
-  if (!list.length && !hasFilters && state.tickets && state.tickets.length) {
-    list = state.tickets.slice();
-  }
-
-  const byBarber = {};
-  let grandCommission = 0;
-
-  list.forEach((t) => {
-    const barber = t.barber || "Sin barbero";
-    const total = Number(t.totalAmount || 0);
-    const rate = getCommissionRateForBarber(barber);
-    const commission = (total * rate) / 100;
-
-    if (!byBarber[barber]) {
-      byBarber[barber] = {
-        barber,
-        totalSales: 0,
-        totalCommission: 0,
-        rate
-      };
-    }
-    byBarber[barber].totalSales += total;
-    byBarber[barber].totalCommission += commission;
-    grandCommission += commission;
-  });
-
-  const rows = Object.values(byBarber).sort((a, b) =>
-    a.barber.localeCompare(b.barber)
-  );
-
-  comiTableBody.innerHTML = "";
-
-  rows.forEach((row) => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${row.barber}</td>
-      <td>${row.rate.toFixed(1)}%</td>
-      <td>$${row.totalSales.toFixed(2)}</td>
-      <td>$${row.totalCommission.toFixed(2)}</td>
-    `;
-    comiTableBody.appendChild(tr);
-  });
-
-  comiTotalSpan.textContent = `$${grandCommission.toFixed(2)}`;
-}
-
 /* ========== VISTAS / PÁGINAS ========== */
+
 function showPinScreen() {
-  pinScreen.classList.remove("hidden");
-  authScreen.classList.add("hidden");
-  appShell.classList.add("hidden");
-  pinInput.value = "";
-  pinError.textContent = "";
+  if (pinScreen) pinScreen.classList.remove("hidden");
+  if (authScreen) authScreen.classList.add("hidden");
+  if (appShell) appShell.classList.add("hidden");
+  if (pinInput) pinInput.value = "";
+  if (pinError) pinError.textContent = "";
 }
 
 function showAuthScreen() {
-  pinScreen.classList.add("hidden");
-  authScreen.classList.remove("hidden");
-  appShell.classList.add("hidden");
+  if (pinScreen) pinScreen.classList.add("hidden");
+  if (authScreen) authScreen.classList.remove("hidden");
+  if (appShell) appShell.classList.add("hidden");
 }
 
 function showAppShell() {
-  pinScreen.classList.add("hidden");
-  authScreen.classList.add("hidden");
-  appShell.classList.remove("hidden");
+  if (pinScreen) pinScreen.classList.add("hidden");
+  if (authScreen) authScreen.classList.add("hidden");
+  if (appShell) appShell.classList.remove("hidden");
 }
 
 function setActivePage(pageName) {
   Object.keys(pages).forEach((name) => {
-    pages[name].classList.toggle("active-page", name === pageName);
+    const page = pages[name];
+    if (!page) return;
+    page.classList.toggle("active-page", name === pageName);
   });
   navButtons.forEach((btn) => {
     const target = btn.getAttribute("data-page");
     btn.classList.toggle("nav-btn-active", target === pageName);
   });
-
-  if (pageName === "comisiones") {
-    renderCommissionsSummary();
-  }
 }
 
 /* ========== PIN ========== */
+
 function handlePinEnter() {
-  const v = (pinInput.value || "").trim();
+  const v = (pinInput?.value || "").trim();
+  if (!pinError) return;
   if (!v) {
     pinError.textContent = "Ingrese el PIN.";
     return;
@@ -397,52 +449,19 @@ function handlePinEnter() {
   }
 }
 
-/* ========== FIRESTORE (COMPARTIDO) ========== */
-
-// colección compartida
-function ticketsCollectionRef() {
-  return db.collection("barberTickets");
-}
-
-// documento branding
-function brandingDocRef() {
-  return db.collection("branding").doc("barber");
-}
-
-/* ========== AUTH GOOGLE + LISTENER ========== */
-function startTicketsListener() {
-  if (state.unsubscribeTickets) {
-    state.unsubscribeTickets();
-    state.unsubscribeTickets = null;
-  }
-  state.unsubscribeTickets = ticketsCollectionRef()
-    .orderBy("number", "asc")
-    .onSnapshot(
-      (snap) => {
-        const arr = [];
-        snap.forEach((doc) => arr.push(doc.data()));
-        state.tickets = arr;
-        saveState();
-        renderTicketNumber();
-        renderTicketsTable();
-        computeCajaTotals();
-        renderCommissionsSummary();
-      },
-      (err) => {
-        console.error("onSnapshot error", err);
-      }
-    );
-}
+/* ========== AUTH + LISTENERS FIRESTORE ========== */
 
 async function signInWithGoogle() {
   try {
     const result = await auth.signInWithPopup(googleProvider);
     const user = result.user;
     state.user = user;
-    userEmailSpan.textContent = user.email || "";
+    if (userEmailSpan) userEmailSpan.textContent = user.email || "";
     saveState();
-    await loadBrandingFromCloud();
-    startTicketsListener();
+    startTicketsListener(user.uid);
+    startBarbersListener(user.uid);
+    startAppointmentsListener(user.uid);
+    loadBrandingFromCloud(user.uid);
     showAppShell();
   } catch (err) {
     console.error("Error Google SignIn", err);
@@ -460,8 +479,16 @@ async function signOutAndReset() {
     state.unsubscribeTickets();
     state.unsubscribeTickets = null;
   }
+  if (state.unsubscribeBarbers) {
+    state.unsubscribeBarbers();
+    state.unsubscribeBarbers = null;
+  }
+  if (state.unsubscribeAppointments) {
+    state.unsubscribeAppointments();
+    state.unsubscribeAppointments = null;
+  }
   state.user = null;
-  userEmailSpan.textContent = "Sin conexión a Google";
+  if (userEmailSpan) userEmailSpan.textContent = "Sin conexión a Google";
   saveState();
   showPinScreen();
 }
@@ -469,57 +496,137 @@ async function signOutAndReset() {
 auth.onAuthStateChanged((user) => {
   state.user = user || null;
   if (user) {
-    userEmailSpan.textContent = user.email || "";
-    startTicketsListener();
+    if (userEmailSpan) userEmailSpan.textContent = user.email || "";
+    startTicketsListener(user.uid);
+    startBarbersListener(user.uid);
+    startAppointmentsListener(user.uid);
+    loadBrandingFromCloud(user.uid);
   } else {
-    userEmailSpan.textContent = "Sin conexión a Google";
+    if (userEmailSpan) userEmailSpan.textContent = "Sin conexión a Google";
     if (state.unsubscribeTickets) {
       state.unsubscribeTickets();
       state.unsubscribeTickets = null;
     }
+    if (state.unsubscribeBarbers) {
+      state.unsubscribeBarbers();
+      state.unsubscribeBarbers = null;
+    }
+    if (state.unsubscribeAppointments) {
+      state.unsubscribeAppointments();
+      state.unsubscribeAppointments = null;
+    }
   }
 });
 
-/* ========== DASHBOARD: TICKETS ========== */
+/* LISTENERS */
+
+function startTicketsListener(uid) {
+  if (!uid) return;
+  if (state.unsubscribeTickets) {
+    state.unsubscribeTickets();
+    state.unsubscribeTickets = null;
+  }
+  state.unsubscribeTickets = ticketsCollectionRef(uid)
+    .orderBy("number", "asc")
+    .onSnapshot(
+      (snap) => {
+        const arr = [];
+        snap.forEach((doc) => arr.push(doc.data()));
+        state.tickets = arr;
+        saveState();
+        renderTicketNumber();
+        renderTicketsTable();
+        computeCajaTotals();
+      },
+      (err) => console.error("onSnapshot tickets error", err)
+    );
+}
+
+function startBarbersListener(uid) {
+  if (!uid) return;
+  if (state.unsubscribeBarbers) {
+    state.unsubscribeBarbers();
+    state.unsubscribeBarbers = null;
+  }
+  state.unsubscribeBarbers = barbersCollectionRef(uid)
+    .orderBy("name", "asc")
+    .onSnapshot(
+      (snap) => {
+        const arr = [];
+        snap.forEach((doc) => arr.push({ id: doc.id, ...doc.data() }));
+        state.barbers = arr;
+        saveState();
+        renderBarbersUI();
+        renderBarbersInSelects();
+      },
+      (err) => console.error("onSnapshot barbers error", err)
+    );
+}
+
+function startAppointmentsListener(uid) {
+  if (!uid) return;
+  if (state.unsubscribeAppointments) {
+    state.unsubscribeAppointments();
+    state.unsubscribeAppointments = null;
+  }
+  state.unsubscribeAppointments = appointmentsCollectionRef(uid)
+    .orderBy("date", "asc")
+    .orderBy("time", "asc")
+    .onSnapshot(
+      (snap) => {
+        const arr = [];
+        snap.forEach((doc) => arr.push({ id: doc.id, ...doc.data() }));
+        state.appointments = arr;
+        saveState();
+        renderAgendaTable();
+      },
+      (err) => console.error("onSnapshot appointments error", err)
+    );
+}
+
+/* ========== TICKETS: FORM ========== */
+
 function recalcTotal() {
-  const qty = Number(quantityInput.value || 0);
-  const unit = Number(unitPriceInput.value || 0);
-  const tip = Number(tipAmountInput.value || 0);
+  const qty = Number(quantityInput?.value || 0);
+  const unit = Number(unitPriceInput?.value || 0);
+  const tip = Number(tipAmountInput?.value || 0);
   const subtotal = qty * unit;
   const total = subtotal + tip;
-  totalAmountInput.value = total.toFixed(2);
+  if (totalAmountInput) totalAmountInput.value = total.toFixed(2);
 }
 
 function resetFormForNewTicket() {
   const today = new Date();
-  ticketDateInput.value = today.toISOString().slice(0, 10);
-  clientNameInput.value = "";
-  barberSelect.value = "";
-  barberCustomInput.value = "";
-  paymentMethodSelect.value = "";
-  serviceDescInput.value = "";
-  quantityInput.value = 1;
-  unitPriceInput.value = "";
-  tipAmountInput.value = "";
+  if (ticketDateInput) {
+    ticketDateInput.value = today.toISOString().slice(0, 10);
+  }
+  if (clientNameInput) clientNameInput.value = "";
+  if (barberSelect) barberSelect.value = "";
+  if (barberCustomInput) barberCustomInput.value = "";
+  if (paymentMethodSelect) paymentMethodSelect.value = "";
+  if (serviceDescInput) serviceDescInput.value = "";
+  if (quantityInput) quantityInput.value = 1;
+  if (unitPriceInput) unitPriceInput.value = "";
+  if (tipAmountInput) tipAmountInput.value = "";
   recalcTotal();
-  ticketNumberInput.value = nextTicketNumber();
-  formMessage.textContent = "";
+  renderTicketNumber();
+  if (formMessage) formMessage.textContent = "";
   currentEditingNumber = null;
 }
 
 function collectTicketFromForm() {
-  const number = Number(ticketNumberInput.value || 0);
-  const date = ticketDateInput.value;
-  const clientName = clientNameInput.value.trim();
-  const barberPre = barberSelect.value;
-  const barberCustom = barberCustomInput.value.trim();
+  const number = Number(ticketNumberInput?.value || 0);
+  const date = ticketDateInput?.value;
+  const clientName = (clientNameInput?.value || "").trim();
+  const barberPre = barberSelect?.value || "";
+  const barberCustom = (barberCustomInput?.value || "").trim();
   const barber = barberCustom || barberPre || "";
-  const paymentMethod = paymentMethodSelect.value;
-  const serviceDesc = serviceDescInput.value.trim();
-  const quantity = Number(quantityInput.value || 0);
-  const unitPrice = Number(unitPriceInput.value || 0);
-  const tipAmount = Number(tipAmountInput.value || 0);
-  const totalAmount = Number(totalAmountInput.value || 0);
+  const paymentMethod = paymentMethodSelect?.value || "";
+  const serviceDesc = (serviceDescInput?.value || "").trim();
+  const quantity = Number(quantityInput?.value || 0);
+  const unitPrice = Number(unitPriceInput?.value || 0);
+  const tipAmount = Number(tipAmountInput?.value || 0);
+  const totalAmount = Number(totalAmountInput?.value || 0);
 
   if (
     !number ||
@@ -550,49 +657,54 @@ function collectTicketFromForm() {
 }
 
 async function saveTicket() {
-  if (!state.user) {
-    formMessage.textContent = "Conéctate con Google antes de guardar tickets.";
+  const uid = state.user?.uid;
+  if (!uid) {
+    if (formMessage)
+      formMessage.textContent = "Conéctate con Google antes de guardar tickets.";
     return;
   }
   try {
     const ticket = collectTicketFromForm();
     const docId = String(ticket.number);
-
-    await ticketsCollectionRef()
-      .doc(docId)
-      .set(ticket, { merge: true });
-
-    formMessage.textContent = currentEditingNumber
-      ? "Ticket actualizado correctamente."
-      : "Ticket guardado y sincronizado con Firebase.";
-
+    await ticketsCollectionRef(uid).doc(docId).set(ticket, { merge: true });
+    if (formMessage) {
+      formMessage.textContent = currentEditingNumber
+        ? "Ticket actualizado correctamente."
+        : "Ticket guardado y sincronizado con Firebase.";
+    }
     currentEditingNumber = null;
     resetFormForNewTicket();
   } catch (err) {
     console.error("Error guardando ticket", err);
-    formMessage.textContent = err.message || "Error al guardar el ticket.";
+    if (formMessage) {
+      formMessage.textContent = err.message || "Error al guardar el ticket.";
+    }
   }
 }
 
-/* ========== BRANDING EN FIRESTORE ========== */
-async function loadBrandingFromCloud() {
-  if (!state.user) return;
+/* ========== BRANDING EN FIRESTORE (POR USUARIO) ========== */
+
+async function loadBrandingFromCloud(uid) {
+  if (!uid) return;
   try {
-    const snap = await brandingDocRef().get();
+    const snap = await brandingDocRef(uid).get();
     if (snap.exists) {
       const data = snap.data();
       if (data.appName) state.appName = data.appName;
       if (data.logoUrl !== undefined) state.logoUrl = data.logoUrl;
-      if (data.pdfHeaderText !== undefined) state.pdfHeaderText = data.pdfHeaderText;
-      if (data.pdfFooterText !== undefined) state.pdfFooterText = data.pdfFooterText;
+      if (data.pdfHeaderText !== undefined)
+        state.pdfHeaderText = data.pdfHeaderText;
+      if (data.pdfFooterText !== undefined)
+        state.pdfFooterText = data.pdfFooterText;
       if (data.footerText !== undefined) state.footerText = data.footerText;
-      if (data.commissionRates !== undefined) {
-        state.commissionRates = {
-          Edwin: data.commissionRates.Edwin ?? 40,
-          Carlos: data.commissionRates.Carlos ?? 35,
-          Luis: data.commissionRates.Luis ?? 35,
-          default: data.commissionRates.default ?? 30
-        };
+      if (Array.isArray(data.calendarDisabledWeekdays)) {
+        state.calendarDisabledWeekdays = data.calendarDisabledWeekdays;
+      }
+      if (Array.isArray(data.calendarDisabledHours)) {
+        state.calendarDisabledHours = data.calendarDisabledHours;
+      }
+      if (data.theme === "light" || data.theme === "dark") {
+        state.theme = data.theme;
       }
       saveState();
       renderBranding();
@@ -603,8 +715,11 @@ async function loadBrandingFromCloud() {
 }
 
 async function saveBrandingToCloud() {
-  if (!state.user) {
-    brandingStatus.textContent = "Conéctate con Google para guardar branding.";
+  const uid = state.user?.uid;
+  if (!uid) {
+    if (brandingStatus)
+      brandingStatus.textContent =
+        "Conéctate con Google para guardar branding.";
     return;
   }
   try {
@@ -614,37 +729,37 @@ async function saveBrandingToCloud() {
       pdfHeaderText: state.pdfHeaderText || "",
       pdfFooterText: state.pdfFooterText || "",
       footerText: state.footerText || "",
-      commissionRates: state.commissionRates || {
-        Edwin: 40,
-        Carlos: 35,
-        Luis: 35,
-        default: 30
-      }
+      calendarDisabledWeekdays: state.calendarDisabledWeekdays,
+      calendarDisabledHours: state.calendarDisabledHours,
+      theme: state.theme
     };
-    await brandingDocRef().set(payload, { merge: true });
-    brandingStatus.textContent = "Branding guardado en Firebase.";
+    await brandingDocRef(uid).set(payload, { merge: true });
+    if (brandingStatus)
+      brandingStatus.textContent = "Branding guardado en Firebase.";
   } catch (e) {
     console.error("Error guardando branding", e);
-    brandingStatus.textContent = "Error al guardar branding.";
+    if (brandingStatus) brandingStatus.textContent = "Error al guardar branding.";
   }
 }
 
 /* ========== FILTROS / LISTA ========== */
+
 function getFilteredTickets() {
-  const start = filterStartInput.value;
-  const end = filterEndInput.value;
-  const barber = filterBarberSelect.value;
+  const start = filterStartInput ? filterStartInput.value : "";
+  const end = filterEndInput ? filterEndInput.value : "";
+  const barberFilter = filterBarberSelect ? filterBarberSelect.value : "";
 
   return state.tickets.filter((t) => {
     let ok = true;
     if (start && t.date < start) ok = false;
     if (end && t.date > end) ok = false;
-    if (barber && t.barber !== barber) ok = false;
+    if (barberFilter && t.barber !== barberFilter) ok = false;
     return ok;
   });
 }
 
 /* ========== PDF + BACKUP JSON ========== */
+
 function exportTicketsToPDF() {
   const jsPDFLib = window.jspdf && window.jspdf.jsPDF;
   if (!jsPDFLib) {
@@ -661,6 +776,7 @@ function exportTicketsToPDF() {
   const doc = new jsPDFLib({ orientation: "p", unit: "mm", format: "a4" });
 
   const marginLeft = 12;
+
   const col = {
     num: marginLeft,
     date: marginLeft + 12,
@@ -734,11 +850,7 @@ function exportTicketsToPDF() {
   y += 6;
   doc.setFont("helvetica", "bold");
   doc.setFontSize(12);
-  doc.text(
-    `GRAN TOTAL: $${grandTotal.toFixed(2)}`,
-    marginLeft,
-    y
-  );
+  doc.text(`GRAN TOTAL: $${grandTotal.toFixed(2)}`, marginLeft, y);
 
   if (state.pdfFooterText) {
     const footerLines = doc.splitTextToSize(state.pdfFooterText, 180);
@@ -746,30 +858,34 @@ function exportTicketsToPDF() {
     doc.text(footerLines, marginLeft, 288);
   }
 
-  doc.save("tickets-nexus-barber.pdf");
+  doc.save("tickets-nexus-barber-shop.pdf");
 }
 
 function downloadBackupJson() {
-  const list = getFilteredTickets();
-  if (!list.length) {
-    alert("No hay tickets para exportar con el filtro actual.");
-    return;
-  }
-  const blob = new Blob([JSON.stringify(list, null, 2)], {
+  const payload = {
+    appName: state.appName,
+    tickets: state.tickets,
+    barbers: state.barbers,
+    appointments: state.appointments,
+    exportedAt: new Date().toISOString()
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
     type: "application/json"
   });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "tickets-nexus-barber.json";
+  a.download = "backup-nexus-barber-shop.json";
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
 
-/* ========== PIN / MARCAS ========== */
+/* ========== CAMBIAR PIN ========== */
+
 function changePin() {
+  if (!newPinInput || !pinChangeMessage) return;
   const newPin = (newPinInput.value || "").trim();
   if (!newPin || newPin.length < 4) {
     pinChangeMessage.textContent = "El PIN debe tener al menos 4 dígitos.";
@@ -781,16 +897,226 @@ function changePin() {
   newPinInput.value = "";
 }
 
+/* ========== BARBERS UI + CRUD ========== */
+
+function renderBarbersUI() {
+  if (!barbersTableBody) return;
+  barbersTableBody.innerHTML = "";
+  state.barbers.forEach((b) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${b.name || ""}</td>
+      <td>${(b.percent || 0).toFixed(0)}%</td>
+      <td>
+        <button class="btn-table edit" data-barber-id="${b.id}">Editar</button>
+        <button class="btn-table delete" data-barber-id="${b.id}">X</button>
+      </td>
+    `;
+    barbersTableBody.appendChild(tr);
+  });
+}
+
+function renderBarbersInSelects() {
+  const barbersNames = state.barbers.map((b) => b.name);
+
+  if (barberSelect) {
+    const current = barberSelect.value;
+    barberSelect.innerHTML = `<option value="">Seleccionar...</option>`;
+    barbersNames.forEach((name) => {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      barberSelect.appendChild(opt);
+    });
+    if (current && barbersNames.includes(current)) {
+      barberSelect.value = current;
+    }
+  }
+
+  if (filterBarberSelect) {
+    const currentF = filterBarberSelect.value;
+    filterBarberSelect.innerHTML = `<option value="">Todos</option>`;
+    barbersNames.forEach((name) => {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      filterBarberSelect.appendChild(opt);
+    });
+    if (currentF && barbersNames.includes(currentF)) {
+      filterBarberSelect.value = currentF;
+    }
+  }
+
+  if (agendaBarberSelect) {
+    const currentA = agendaBarberSelect.value;
+    agendaBarberSelect.innerHTML = `<option value="">Seleccionar...</option>`;
+    barbersNames.forEach((name) => {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      agendaBarberSelect.appendChild(opt);
+    });
+    if (currentA && barbersNames.includes(currentA)) {
+      agendaBarberSelect.value = currentA;
+    }
+  }
+}
+
+async function addBarber(name, percent) {
+  const uid = state.user?.uid;
+  if (!uid) {
+    alert("Inicia sesión con Google para gestionar barberos.");
+    return;
+  }
+  await barbersCollectionRef(uid).add({
+    name,
+    percent: Number(percent) || 0
+  });
+}
+
+async function updateBarber(id, name, percent) {
+  const uid = state.user?.uid;
+  if (!uid || !id) return;
+  await barbersCollectionRef(uid)
+    .doc(id)
+    .set(
+      {
+        name,
+        percent: Number(percent) || 0
+      },
+      { merge: true }
+    );
+}
+
+async function deleteBarber(id) {
+  const uid = state.user?.uid;
+  if (!uid || !id) return;
+  const ok = confirm("¿Eliminar barbero?");
+  if (!ok) return;
+  await barbersCollectionRef(uid).doc(id).delete();
+}
+
+/* ========== AGENDA / CALENDARIO: UI + CRUD ========== */
+
+function renderAgendaTable() {
+  if (!agendaTableBody) return;
+  agendaTableBody.innerHTML = "";
+  state.appointments
+    .slice()
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
+    .forEach((ap) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${ap.date || ""}</td>
+        <td>${ap.time || ""}</td>
+        <td>${ap.barber || ""}</td>
+        <td>${ap.clientName || ""}</td>
+        <td>${ap.serviceDesc || ""}</td>
+        <td>${ap.status || ""}</td>
+        <td>
+          <button class="btn-table edit" data-appt-id="${ap.id}">Editar</button>
+          <button class="btn-table delete" data-appt-id="${ap.id}">X</button>
+        </td>
+      `;
+      agendaTableBody.appendChild(tr);
+    });
+}
+
+function collectAppointmentFromForm() {
+  const date = agendaDateInput?.value;
+  const time = agendaTimeInput?.value;
+  const barber = agendaBarberSelect?.value || "";
+  const clientName = (agendaClientInput?.value || "").trim();
+  const serviceDesc = (agendaServiceInput?.value || "").trim();
+  const status = agendaStatusSelect?.value || "Pendiente";
+
+  if (!date || !time || !barber || !clientName || !serviceDesc) {
+    throw new Error("Faltan campos requeridos en la cita.");
+  }
+
+  if (!isDateAllowed(date)) {
+    throw new Error("La fecha seleccionada está deshabilitada en el calendario.");
+  }
+  if (!isTimeAllowed(time)) {
+    throw new Error("La hora seleccionada está deshabilitada en el calendario.");
+  }
+
+  return {
+    date,
+    time,
+    barber,
+    clientName,
+    serviceDesc,
+    status
+  };
+}
+
+function resetAgendaForm() {
+  const today = new Date().toISOString().slice(0, 10);
+  if (agendaDateInput) agendaDateInput.value = today;
+  if (agendaTimeInput) agendaTimeInput.value = "";
+  if (agendaBarberSelect) agendaBarberSelect.value = "";
+  if (agendaClientInput) agendaClientInput.value = "";
+  if (agendaServiceInput) agendaServiceInput.value = "";
+  if (agendaStatusSelect) agendaStatusSelect.value = "Pendiente";
+  currentEditingAppointmentId = null;
+  showCalendarWarning("");
+}
+
+async function saveAppointment() {
+  const uid = state.user?.uid;
+  if (!uid) {
+    alert("Conéctate con Google para gestionar citas.");
+    return;
+  }
+  try {
+    const ap = collectAppointmentFromForm();
+    if (!ap) return;
+    const col = appointmentsCollectionRef(uid);
+    if (currentEditingAppointmentId) {
+      await col.doc(currentEditingAppointmentId).set(ap, { merge: true });
+    } else {
+      await col.add(ap);
+    }
+    resetAgendaForm();
+  } catch (e) {
+    console.error(e);
+    showCalendarWarning(e.message || "Error guardando cita.");
+  }
+}
+
+async function deleteAppointment(id) {
+  const uid = state.user?.uid;
+  if (!uid || !id) return;
+  const ok = confirm("¿Eliminar la cita?");
+  if (!ok) return;
+  await appointmentsCollectionRef(uid).doc(id).delete();
+}
+
 /* ========== EVENTOS ========== */
-pinEnterBtn.addEventListener("click", handlePinEnter);
-pinInput.addEventListener("keyup", (e) => {
-  if (e.key === "Enter") handlePinEnter();
-});
 
-googleSignInBtn.addEventListener("click", signInWithGoogle);
-authBackToPinBtn.addEventListener("click", showPinScreen);
-logoutBtn.addEventListener("click", signOutAndReset);
+// PIN
+if (pinEnterBtn) {
+  pinEnterBtn.addEventListener("click", handlePinEnter);
+}
+if (pinInput) {
+  pinInput.addEventListener("keyup", (e) => {
+    if (e.key === "Enter") handlePinEnter();
+  });
+}
 
+// Auth
+if (googleSignInBtn) {
+  googleSignInBtn.addEventListener("click", signInWithGoogle);
+}
+if (authBackToPinBtn) {
+  authBackToPinBtn.addEventListener("click", showPinScreen);
+}
+if (logoutBtn) {
+  logoutBtn.addEventListener("click", signOutAndReset);
+}
+
+// Navegación
 navButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
     const page = btn.getAttribute("data-page");
@@ -798,190 +1124,321 @@ navButtons.forEach((btn) => {
   });
 });
 
-appNameEditable.addEventListener("input", () => {
-  state.appName = appNameEditable.textContent.trim() || "Nexus Barber Shop";
-  saveState();
-  renderBranding();
-});
-
-logoUrlInput.addEventListener("input", () => {
-  state.logoUrl = logoUrlInput.value.trim();
-  saveState();
-  renderBranding();
-});
-
-pdfHeaderTextArea.addEventListener("input", () => {
-  state.pdfHeaderText = pdfHeaderTextArea.value;
-  saveState();
-});
-
-pdfFooterTextArea.addEventListener("input", () => {
-  state.pdfFooterText = pdfFooterTextArea.value;
-  saveState();
-});
-
-footerTextInput.addEventListener("input", () => {
-  state.footerText = footerTextInput.value;
-  saveState();
-  footerTextSpan.textContent = state.footerText;
-});
-
-saveBrandingBtn.addEventListener("click", (e) => {
-  e.preventDefault();
-  saveBrandingToCloud();
-});
-
-if (commissionEdwinInput) {
-  commissionEdwinInput.addEventListener("input", () => {
-    const v = Number(commissionEdwinInput.value || 0);
-    if (!state.commissionRates) state.commissionRates = {};
-    state.commissionRates.Edwin = v;
+// Branding / nombre app
+if (appNameEditable) {
+  appNameEditable.addEventListener("input", () => {
+    state.appName = appNameEditable.textContent.trim() || "Nexus Barber Shop";
     saveState();
+    renderBranding();
   });
 }
-if (commissionCarlosInput) {
-  commissionCarlosInput.addEventListener("input", () => {
-    const v = Number(commissionCarlosInput.value || 0);
-    if (!state.commissionRates) state.commissionRates = {};
-    state.commissionRates.Carlos = v;
+
+if (logoUrlInput) {
+  logoUrlInput.addEventListener("input", () => {
+    state.logoUrl = logoUrlInput.value.trim();
     saveState();
+    renderBranding();
   });
 }
-if (commissionLuisInput) {
-  commissionLuisInput.addEventListener("input", () => {
-    const v = Number(commissionLuisInput.value || 0);
-    if (!state.commissionRates) state.commissionRates = {};
-    state.commissionRates.Luis = v;
-    saveState();
-  });
-}
-if (commissionDefaultInput) {
-  commissionDefaultInput.addEventListener("input", () => {
-    const v = Number(commissionDefaultInput.value || 0);
-    if (!state.commissionRates) state.commissionRates = {};
-    state.commissionRates.default = v;
+
+if (pdfHeaderTextArea) {
+  pdfHeaderTextArea.addEventListener("input", () => {
+    state.pdfHeaderText = pdfHeaderTextArea.value;
     saveState();
   });
 }
 
-changePinBtn.addEventListener("click", (e) => {
-  e.preventDefault();
-  changePin();
-});
-
-newTicketBtn.addEventListener("click", (e) => {
-  e.preventDefault();
-  resetFormForNewTicket();
-});
-
-quantityInput.addEventListener("input", recalcTotal);
-unitPriceInput.addEventListener("input", recalcTotal);
-tipAmountInput.addEventListener("input", recalcTotal);
-
-saveTicketBtn.addEventListener("click", (e) => {
-  e.preventDefault();
-  saveTicket();
-});
-
-applyFilterBtn.addEventListener("click", () => {
-  const list = getFilteredTickets();
-  renderTicketsTable(list);
-});
-
-clearFilterBtn.addEventListener("click", () => {
-  filterStartInput.value = "";
-  filterEndInput.value = "";
-  filterBarberSelect.value = "";
-  renderTicketsTable();
-});
-
-/* Caja eventos */
-cajaApplyBtn.addEventListener("click", () => {
-  computeCajaTotals();
-});
-
-cajaClearBtn.addEventListener("click", () => {
-  const today = new Date().toISOString().slice(0, 10);
-  cajaStartInput.value = today;
-  cajaEndInput.value = today;
-  computeCajaTotals();
-});
-
-exportPdfBtn.addEventListener("click", exportTicketsToPDF);
-backupJsonBtn.addEventListener("click", downloadBackupJson);
-
-/* Eventos Comisiones */
-if (comiApplyBtn) {
-  comiApplyBtn.addEventListener("click", () => {
-    renderCommissionsSummary();
-  });
-}
-if (comiClearBtn) {
-  comiClearBtn.addEventListener("click", () => {
-    if (comiStartInput) comiStartInput.value = "";
-    if (comiEndInput) comiEndInput.value = "";
-    if (comiBarberSelect) comiBarberSelect.value = "";
-    renderCommissionsSummary();
+if (pdfFooterTextArea) {
+  pdfFooterTextArea.addEventListener("input", () => {
+    state.pdfFooterText = pdfFooterTextArea.value;
+    saveState();
   });
 }
 
-/* Editar / eliminar tickets */
-ticketsTableBody.addEventListener("click", async (e) => {
-  const btn = e.target.closest("button[data-action]");
-  if (!btn) return;
+if (footerTextInput) {
+  footerTextInput.addEventListener("input", () => {
+    state.footerText = footerTextInput.value;
+    saveState();
+    if (footerTextSpan) footerTextSpan.textContent = state.footerText;
+  });
+}
 
-  const action = btn.dataset.action;
-  const number = Number(btn.dataset.number);
-  if (!number) return;
+if (saveBrandingBtn) {
+  saveBrandingBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    saveBrandingToCloud();
+  });
+}
 
-  const ticket = state.tickets.find((t) => Number(t.number) === number);
-  if (!ticket) return;
+// Tema
+if (themeToggleBtn) {
+  themeToggleBtn.addEventListener("click", () => {
+    state.theme = state.theme === "dark" ? "light" : "dark";
+    saveState();
+    applyTheme();
+    saveBrandingToCloud();
+  });
+}
 
-  if (action === "edit") {
-    currentEditingNumber = number;
+// Cambiar PIN
+if (changePinBtn) {
+  changePinBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    changePin();
+  });
+}
 
-    ticketNumberInput.value = ticket.number;
-    ticketDateInput.value = ticket.date;
-    clientNameInput.value = ticket.clientName;
-    serviceDescInput.value = ticket.serviceDesc;
-    quantityInput.value = ticket.quantity;
-    unitPriceInput.value = ticket.unitPrice;
-    tipAmountInput.value = ticket.tipAmount || 0;
+// Tickets: nuevo / guardar
+if (newTicketBtn) {
+  newTicketBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    resetFormForNewTicket();
+  });
+}
 
-    if (["Edwin", "Carlos", "Luis"].includes(ticket.barber)) {
-      barberSelect.value = ticket.barber;
-      barberCustomInput.value = "";
-    } else {
-      barberSelect.value = "";
-      barberCustomInput.value = ticket.barber || "";
+if (quantityInput) quantityInput.addEventListener("input", recalcTotal);
+if (unitPriceInput) unitPriceInput.addEventListener("input", recalcTotal);
+if (tipAmountInput) tipAmountInput.addEventListener("input", recalcTotal);
+
+if (saveTicketBtn) {
+  saveTicketBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    saveTicket();
+  });
+}
+
+// Historial: filtros
+if (applyFilterBtn) {
+  applyFilterBtn.addEventListener("click", () => {
+    const list = getFilteredTickets();
+    renderTicketsTable(list);
+  });
+}
+
+if (clearFilterBtn) {
+  clearFilterBtn.addEventListener("click", () => {
+    if (filterStartInput) filterStartInput.value = "";
+    if (filterEndInput) filterEndInput.value = "";
+    if (filterBarberSelect) filterBarberSelect.value = "";
+    renderTicketsTable();
+  });
+}
+
+// Caja
+if (cajaApplyBtn) {
+  cajaApplyBtn.addEventListener("click", () => {
+    computeCajaTotals();
+  });
+}
+
+if (cajaClearBtn) {
+  cajaClearBtn.addEventListener("click", () => {
+    const today = new Date().toISOString().slice(0, 10);
+    if (cajaStartInput) cajaStartInput.value = today;
+    if (cajaEndInput) cajaEndInput.value = today;
+    computeCajaTotals();
+  });
+}
+
+// Export PDF / Backup
+if (exportPdfBtn) {
+  exportPdfBtn.addEventListener("click", exportTicketsToPDF);
+}
+if (backupJsonBtn) {
+  backupJsonBtn.addEventListener("click", downloadBackupJson);
+}
+
+// Tabla historial: editar / borrar tickets
+if (ticketsTableBody) {
+  ticketsTableBody.addEventListener("click", async (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const action = btn.dataset.action;
+    const number = Number(btn.dataset.number);
+    if (!number) return;
+
+    const ticket = state.tickets.find((t) => Number(t.number) === number);
+    if (!ticket) return;
+
+    if (action === "edit") {
+      currentEditingNumber = number;
+      if (ticketNumberInput) ticketNumberInput.value = ticket.number;
+      if (ticketDateInput) ticketDateInput.value = ticket.date;
+      if (clientNameInput) clientNameInput.value = ticket.clientName;
+      if (serviceDescInput) serviceDescInput.value = ticket.serviceDesc;
+      if (quantityInput) quantityInput.value = ticket.quantity;
+      if (unitPriceInput) unitPriceInput.value = ticket.unitPrice;
+      if (tipAmountInput) tipAmountInput.value = ticket.tipAmount || 0;
+
+      if (barberSelect && barberCustomInput) {
+        const names = state.barbers.map((b) => b.name);
+        if (names.includes(ticket.barber)) {
+          barberSelect.value = ticket.barber;
+          barberCustomInput.value = "";
+        } else {
+          barberSelect.value = "";
+          barberCustomInput.value = ticket.barber || "";
+        }
+      }
+
+      if (paymentMethodSelect)
+        paymentMethodSelect.value = ticket.paymentMethod;
+
+      recalcTotal();
+      if (formMessage)
+        formMessage.textContent = `Editando ticket #${ticket.number}`;
+      setActivePage("dashboard");
     }
 
-    paymentMethodSelect.value = ticket.paymentMethod;
-    recalcTotal();
-    formMessage.textContent = `Editando ticket #${ticket.number}`;
-    setActivePage("dashboard");
-  }
+    if (action === "delete") {
+      const uid = state.user?.uid;
+      if (!uid) {
+        alert("Conéctate con Google para eliminar tickets.");
+        return;
+      }
+      const ok = confirm(`¿Eliminar el ticket #${number}?`);
+      if (!ok) return;
+      try {
+        await ticketsCollectionRef(uid).doc(String(number)).delete();
+      } catch (err) {
+        console.error("Error eliminando ticket", err);
+        alert("No se pudo eliminar el ticket.");
+      }
+    }
+  });
+}
 
-  if (action === "delete") {
-    if (!state.user) {
-      alert("Conéctate con Google para eliminar tickets.");
+// Barbers: tabla editar / eliminar
+if (barbersTableBody) {
+  barbersTableBody.addEventListener("click", (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const id = btn.dataset.barberId;
+    const action = btn.classList.contains("edit") ? "edit" : "delete";
+    const barber = state.barbers.find((b) => b.id === id);
+    if (!barber) return;
+
+    if (action === "edit") {
+      currentEditingBarberId = id;
+      if (barberNameInput) barberNameInput.value = barber.name || "";
+      if (barberPercentInput)
+        barberPercentInput.value = barber.percent || 0;
+    } else if (action === "delete") {
+      deleteBarber(id);
+    }
+  });
+}
+
+if (barberSaveBtn) {
+  barberSaveBtn.addEventListener("click", async (e) => {
+    e.preventDefault();
+    const name = (barberNameInput?.value || "").trim();
+    const percent = Number(barberPercentInput?.value || 0);
+    if (!name) {
+      alert("Escribe el nombre del barbero.");
       return;
     }
-    const ok = confirm(`¿Eliminar el ticket #${number}? Esta acción no se puede deshacer.`);
-    if (!ok) return;
-
-    try {
-      await ticketsCollectionRef()
-        .doc(String(number))
-        .delete();
-    } catch (err) {
-      console.error("Error eliminando ticket", err);
-      alert("No se pudo eliminar el ticket.");
+    if (currentEditingBarberId) {
+      await updateBarber(currentEditingBarberId, name, percent);
+    } else {
+      await addBarber(name, percent);
     }
-  }
-});
+    if (barberNameInput) barberNameInput.value = "";
+    if (barberPercentInput) barberPercentInput.value = "";
+    currentEditingBarberId = null;
+  });
+}
+
+if (barberCancelEditBtn) {
+  barberCancelEditBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    currentEditingBarberId = null;
+    if (barberNameInput) barberNameInput.value = "";
+    if (barberPercentInput) barberPercentInput.value = "";
+  });
+}
+
+// Agenda: guardar / limpiar
+if (agendaAddBtn) {
+  agendaAddBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    saveAppointment();
+  });
+}
+if (agendaClearBtn) {
+  agendaClearBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    resetAgendaForm();
+  });
+}
+
+// Agenda: tabla editar / borrar
+if (agendaTableBody) {
+  agendaTableBody.addEventListener("click", (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const id = btn.dataset.apptId;
+    const isEdit = btn.classList.contains("edit");
+    const ap = state.appointments.find((a) => a.id === id);
+    if (!ap) return;
+
+    if (isEdit) {
+      currentEditingAppointmentId = id;
+      if (agendaDateInput) agendaDateInput.value = ap.date || "";
+      if (agendaTimeInput) agendaTimeInput.value = ap.time || "";
+      if (agendaBarberSelect) agendaBarberSelect.value = ap.barber || "";
+      if (agendaClientInput) agendaClientInput.value = ap.clientName || "";
+      if (agendaServiceInput) agendaServiceInput.value = ap.serviceDesc || "";
+      if (agendaStatusSelect) agendaStatusSelect.value = ap.status || "Pendiente";
+      setActivePage("agenda");
+    } else {
+      deleteAppointment(id);
+    }
+  });
+}
+
+// Calendario: avisos si se escoge algo deshabilitado
+if (agendaDateInput) {
+  agendaDateInput.addEventListener("change", () => {
+    const d = agendaDateInput.value;
+    if (d && !isDateAllowed(d)) {
+      showCalendarWarning("Ese día está deshabilitado en el calendario.");
+    } else {
+      showCalendarWarning("");
+    }
+  });
+}
+if (agendaTimeInput) {
+  agendaTimeInput.addEventListener("change", () => {
+    const t = agendaTimeInput.value;
+    if (t && !isTimeAllowed(t)) {
+      showCalendarWarning("Esa hora está deshabilitada en el calendario.");
+    } else {
+      showCalendarWarning("");
+    }
+  });
+}
+
+// Config calendario: guardar cambios en disabled días/horas
+if (disabledWeekdaysInput) {
+  disabledWeekdaysInput.addEventListener("input", () => {
+    state.calendarDisabledWeekdays = parseDisabledWeekdays(
+      disabledWeekdaysInput.value
+    );
+    saveState();
+  });
+}
+if (disabledHoursInput) {
+  disabledHoursInput.addEventListener("input", () => {
+    state.calendarDisabledHours = parseDisabledHours(
+      disabledHoursInput.value
+    );
+    saveState();
+  });
+}
 
 /* ========== INIT + PWA ========== */
+
 function init() {
   loadState();
   renderBranding();
@@ -989,11 +1446,12 @@ function init() {
   renderTicketsTable(state.tickets);
 
   const today = new Date().toISOString().slice(0, 10);
-  cajaStartInput.value = today;
-  cajaEndInput.value = today;
+  if (cajaStartInput) cajaStartInput.value = today;
+  if (cajaEndInput) cajaEndInput.value = today;
   computeCajaTotals();
 
   resetFormForNewTicket();
+  resetAgendaForm();
   setActivePage("dashboard");
   showPinScreen();
 
