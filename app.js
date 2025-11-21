@@ -3,13 +3,14 @@
 /* ========== CONFIG FIREBASE ========== */
 const firebaseConfig = {
   // ⛔ IMPORTANTE: reemplaza esto por la config de tu proyecto "nexus-barber"
-  apiKey: "TU_API_KEY_AQUI",
-  authDomain: "tu-proyecto.firebaseapp.com",
-  projectId: "tu-proyecto",
-  storageBucket: "tu-proyecto.appspot.com",
-  messagingSenderId: "000000000000",
-  appId: "1:000000000000:web:xxxxxxxxxxxxxxxxxxxxxx"
+   apiKey: "AIzaSyA6-RrCXbPPVPZ4VqQRest1n_aojN-goPA",
+  authDomain: "nexus-barber-shop.firebaseapp.com",
+  projectId: "nexus-barber-shop",
+  storageBucket: "nexus-barber-shop.firebasestorage.app",
+  messagingSenderId: "524186377414",
+  appId: "1:524186377414:web:909c712216dc1834454bc7"
 };
+
 
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
