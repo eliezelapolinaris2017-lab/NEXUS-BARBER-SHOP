@@ -79,6 +79,7 @@
         <button data-page="historial" class="nav-btn">Historial</button>
         <button data-page="caja" class="nav-btn">Caja</button>
         <button data-page="agenda" class="nav-btn">Agenda</button>
+        <button data-page="comisiones" class="nav-btn">Comisiones</button>
         <button data-page="config" class="nav-btn">Configuración</button>
       </div>
 
@@ -87,7 +88,6 @@
           <span id="userEmail" class="user-email">Sin conexión a Google</span>
         </div>
         <div class="topbar-actions">
-          <button id="themeToggleBtn" class="btn btn-outline">Tema: Oscuro</button>
           <button id="logoutBtn" class="btn btn-danger">Salir</button>
         </div>
       </div>
@@ -120,7 +120,6 @@
           <div class="grid-2">
             <div class="field-group">
               <label class="field-label">Barbero</label>
-              <!-- IMPORTANTE: id="barberSelect" para que lo vea app.js -->
               <select id="barberSelect" class="field-input">
                 <option value="">Seleccionar...</option>
                 <option value="Edwin">Edwin</option>
@@ -200,9 +199,6 @@
               <label>Barbero</label>
               <select id="filterBarber" class="field-input small">
                 <option value="">Todos</option>
-                <option value="Edwin">Edwin</option>
-                <option value="Carlos">Carlos</option>
-                <option value="Luis">Luis</option>
               </select>
             </div>
             <div class="filter-group filter-actions">
@@ -282,7 +278,7 @@
           <div class="panel-header">
             <h2>Agenda de citas</h2>
             <p class="panel-subtitle">
-              Programa y controla las citas de la barbería. Respeta los días/horas deshabilitados desde Configuración.
+              Programa y controla las citas. Respeta los días/horas deshabilitados desde Configuración.
             </p>
           </div>
 
@@ -303,9 +299,6 @@
               <label class="field-label" for="agendaBarber">Barbero</label>
               <select id="agendaBarber" class="field-input">
                 <option value="">Seleccionar...</option>
-                <option value="Edwin">Edwin</option>
-                <option value="Carlos">Carlos</option>
-                <option value="Luis">Luis</option>
               </select>
             </div>
             <div class="field-group">
@@ -358,6 +351,68 @@
         </div>
       </section>
 
+      <!-- ====== PAGE: COMISIONES ====== -->
+      <section id="page-comisiones" class="page">
+        <div class="panel wide">
+          <div class="panel-header">
+            <h2>Comisiones por barbero</h2>
+            <p class="panel-subtitle">
+              Calcula comisiones por rango de fechas y por barbero según los tickets registrados.
+            </p>
+          </div>
+
+          <!-- Filtros -->
+          <div class="filters-row">
+            <div class="filter-group">
+              <label for="comiStart">Desde</label>
+              <input type="date" id="comiStart" class="field-input small">
+            </div>
+
+            <div class="filter-group">
+              <label for="comiEnd">Hasta</label>
+              <input type="date" id="comiEnd" class="field-input small">
+            </div>
+
+            <div class="filter-group">
+              <label for="comiBarber">Barbero</label>
+              <select id="comiBarber" class="field-input small">
+                <option value="">Todos</option>
+              </select>
+            </div>
+
+            <div class="filter-group filter-actions">
+              <button id="comiApplyBtn" class="btn btn-small btn-primary">Aplicar</button>
+              <button id="comiClearBtn" class="btn btn-small btn-text">Limpiar</button>
+            </div>
+          </div>
+
+          <!-- Tabla de comisiones -->
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Barbero</th>
+                  <th>% Comisión</th>
+                  <th>Total vendido</th>
+                  <th>Comisión</th>
+                </tr>
+              </thead>
+              <tbody id="comiTableBody">
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Total general de comisiones -->
+          <div class="caja-summary-grid">
+            <div class="caja-card total">
+              <h3>Comisión total a pagar</h3>
+              <p id="comiTotal" class="caja-amount">$0.00</p>
+              <span class="caja-badge">Suma de todos los barberos filtrados</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- ====== PAGE: CONFIGURACIÓN ====== -->
       <section id="page-config" class="page">
         <div class="panel wide">
@@ -404,15 +459,6 @@
             <p id="pinChangeMessage" class="msg-info small"></p>
           </div>
 
-          <!-- Tema -->
-          <div class="field-group">
-            <h3>Tema de la app</h3>
-            <p class="msg-info small">
-              Usa el botón de la barra superior para cambiar entre oscuro y claro.  
-              La preferencia se guarda en Firebase para tu usuario.
-            </p>
-          </div>
-
           <!-- Config calendario -->
           <div class="field-group">
             <h3>Calendario — días y horas deshabilitados</h3>
@@ -441,7 +487,7 @@
           <div class="field-group">
             <h3>Barberos (lista editable)</h3>
             <p class="msg-info small">
-              Estos barberos se usan en Dashboard, filtros, Agenda y comisiones futuras.
+              Estos barberos se usan en Dashboard, filtros, Agenda y Comisiones.
             </p>
 
             <div class="table-wrap">
@@ -499,6 +545,6 @@
   <script src="https://www.gstatic.com/firebasejs/9.6.11/firebase-firestore-compat.js"></script>
 
   <!-- App -->
-  <script src="app.js?v=2"></script>
+  <script src="app.js?v=1"></script>
 </body>
 </html>
