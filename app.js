@@ -1093,8 +1093,32 @@ async function saveAgendaItem() {
     return;
   }
 
+  // ⛔ Validar día/hora deshabilitados
   if (isSlotDisabled(date, time)) {
     calendarWarning.textContent = "Este día u hora está deshabilitado en la configuración.";
+    return;
+  }
+
+  // ⛔ Evitar pisar horas para el mismo barbero
+  // Comparamos contra las citas ya cargadas en state.agenda
+  const conflict = state.agenda.some((cita) => {
+    // si en el futuro agregas edición de citas, evitamos comparar con la misma
+    const sameDoc = currentAgendaId && cita.id === currentAgendaId;
+    if (sameDoc) return false;
+
+    const sameDate = cita.date === date;
+    const sameTime = cita.time === time;
+    const sameBarber = cita.barber === barber;
+
+    // opcional: ignorar canceladas
+    const isCanceled = cita.status === "Cancelada";
+
+    return sameDate && sameTime && sameBarber && !isCanceled;
+  });
+
+  if (conflict) {
+    calendarWarning.textContent =
+      "Ya existe una cita para este barbero en esa fecha y hora. Elige otro horario.";
     return;
   }
 
@@ -1127,29 +1151,6 @@ async function saveAgendaItem() {
     console.error("Error guardando cita", e);
     calendarWarning.textContent = "No se pudo guardar la cita.";
   }
-}
-
-if (agendaTableBody) {
-  agendaTableBody.addEventListener("click", async (e) => {
-    const btn = e.target.closest("button.delete");
-    if (!btn) return;
-    const id = btn.getAttribute("data-id");
-    if (!id) return;
-    if (!state.user) {
-      alert("Conéctate con Google para eliminar citas.");
-      return;
-    }
-    const ok = confirm("¿Eliminar esta cita?");
-    if (!ok) return;
-    try {
-      const col = agendaCollectionRef();
-      if (!col) throw new Error("No hay colección de agenda.");
-      await col.doc(id).delete();
-    } catch (err) {
-      console.error("Error eliminando cita", err);
-      alert("No se pudo eliminar la cita.");
-    }
-  });
 }
 
 /* ========== COMISIONES ========== */
